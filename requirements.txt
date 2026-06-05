@@ -1,0 +1,17 @@
+openai
+groq
+websockets
+aiohttp
+requests
+httpx
+cachetools
+typst
+google-genai
+Pillow
+emoji
+aiofiles
+chardet
+selenium
+chromadb
+sentence-transformers
+jmcomic
