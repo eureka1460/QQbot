@@ -205,7 +205,7 @@ class AgentOrchestrator:
                     )
                     response = await group.handle_message(
                         0, persona_prompt.message_content, persona_prompt.system_role,
-                        store_user=False,
+                        store_user=False, dynamic_context=persona_prompt.dynamic_context,
                     )
                     _IGNORE_RE = re.compile(r'<ignore>\s*', re.IGNORECASE)
                     if _IGNORE_RE.fullmatch(response.strip()):
@@ -299,6 +299,7 @@ class AgentOrchestrator:
             persona_prompt.message_content,
             persona_prompt.system_role,
             store_user=False,
+            dynamic_context=persona_prompt.dynamic_context,
         )
 
         _IGNORE_RE = re.compile(r'<ignore>\s*', re.IGNORECASE)
@@ -345,6 +346,7 @@ class AgentOrchestrator:
         response = await user_session.handle_message(
             persona_prompt.message_content,
             persona_prompt.system_role,
+            dynamic_context=persona_prompt.dynamic_context,
         )
         segments = await self._build_message_segments(response)
         await self._send_with_human_delay(ws, user_id, segments, is_group=False)

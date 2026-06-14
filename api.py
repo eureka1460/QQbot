@@ -10,6 +10,25 @@ import tempfile
 _MAX_RETRIES = 5
 _RETRY_DELAY = 2.0
 
+# ── Reusable HTTP / OpenAI client (lazy singleton) ──────────────────────
+# Creating a new httpx.AsyncClient + AsyncOpenAI per request prevents
+# connection reuse and (more importantly) breaks DeepSeek prompt-cache
+# prefix matching when combined with server-side session affinity.
+_openai_client = None  # type: AsyncOpenAI | None
+
+
+def _get_openai_client() -> AsyncOpenAI:
+    global _openai_client
+    if _openai_client is None:
+        http_client = httpx.AsyncClient(proxy=PROXY_URL) if PROXY_URL else None
+        _openai_client = AsyncOpenAI(
+            api_key=DEEPSEEK_API_KEY,
+            base_url=DEEPSEEK_BASE_URL,
+            http_client=http_client,
+        )
+    return _openai_client
+
+
 async def call_llm_api(chat_history):
     if not DEEPSEEK_API_KEY:
         raise RuntimeError("DeepSeek API key is not configured")
@@ -26,12 +45,7 @@ async def call_llm_api(chat_history):
 
     for attempt in range(_MAX_RETRIES):
         try:
-            http_client = httpx.AsyncClient(proxy=PROXY_URL) if PROXY_URL else None
-            client = AsyncOpenAI(
-                api_key=DEEPSEEK_API_KEY,
-                base_url=DEEPSEEK_BASE_URL,
-                http_client=http_client,
-            )
+            client = _get_openai_client()
 
             response = await client.chat.completions.create(**request_payload)
             full_response = ""

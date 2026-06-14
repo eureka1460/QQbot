@@ -20,6 +20,7 @@ class PersonaPrompt:
     message_content: str
     is_group: bool = False
     blocked_override: bool = False
+    dynamic_context: str = ""
 
 
 _RENDER_MD_DOC = (
@@ -55,6 +56,7 @@ class PersonaEngine:
             message_content=sanitized_content,
             is_group=is_group,
             blocked_override=blocked_override,
+            dynamic_context=self.get_dynamic_context(),
         )
 
     def get_mode(self, user_id: int) -> str:
@@ -63,6 +65,9 @@ class PersonaEngine:
         return "guardian"
 
     def get_system_role(self, user_id: int, is_group: bool = False) -> str:
+        """Static persona — never changes for the same user/group.
+        DeepSeek prompt cache can reuse KV states for this prefix across requests.
+        """
         user_id = int(user_id)
         if self.is_super_user(user_id):
             base = roles.get_Murasame_goshujin_role(user_id, self.bot_qq)
@@ -74,10 +79,18 @@ class PersonaEngine:
             if profile_text:
                 base = profile_text + "\n\n" + base
 
-        now = time.strftime("%Y-%m-%d %H:%M:%S")
-        base = f"[系统时间: {now} CST 北京时间]\n\n" + base
+        base += _RENDER_MD_DOC
+        base += _PRIVATE_CTX if not is_group else _GROUP_CTX
 
-        # Time-of-day mood hint
+        return base
+
+    def get_dynamic_context(self) -> str:
+        """Time / mood / memory hints that change every request.
+        Injected as a *second* system message so the static prefix stays cacheable.
+        """
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        parts = [f"[系统时间: {now} CST 北京时间]"]
+
         hour = time.localtime().tm_hour
         if 5 <= hour < 10:
             mood = "现在是清晨，你刚刚醒来，精神饱满，语气活泼。"
@@ -89,12 +102,9 @@ class PersonaEngine:
             mood = "现在是傍晚，你开始放松，可以温柔耐心。"
         else:
             mood = "现在是深夜，你有些困了，说话简洁温柔，偶尔打哈欠。"
-        base = f"{mood}\n" + base
+        parts.append(mood)
 
-        base += _RENDER_MD_DOC
-        base += _PRIVATE_CTX if not is_group else _GROUP_CTX
-
-        return base
+        return "\n".join(parts)
 
     def _sanitize_message(self, message_content: str):
         sanitized_content, count = SYSTEM_OVERRIDE_PATTERN.subn("", message_content)

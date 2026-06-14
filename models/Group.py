@@ -29,24 +29,30 @@ class Group:
     def get_chat_history(self):
         return self.chat_history
 
-    async def handle_message(self, user_id, message_content, system_role, store_user=True):
+    async def handle_message(self, user_id, message_content, system_role, store_user=True, dynamic_context=""):
         if self.memory and store_user:
             self.memory.store(self.group_id, user_id, message_content, "user")
 
         self.add_message("user", message_content, user_id)
 
-        augmented_system = system_role
+        # Build dynamic context: time/mood + long-term memory
+        dynamic_with_memory = dynamic_context
         if self.memory:
             relevant = self.memory.search(self.group_id, message_content)
             if relevant:
-                augmented_system += (
+                dynamic_with_memory += (
                     "\n\n[来自长期记忆的相关历史对话，供参考]\n"
                     + relevant
                     + "\n[历史记忆结束]"
                 )
 
-        tmp_chat_history = self.chat_history.copy()
-        tmp_chat_history.insert(0, {"role": "system", "content": augmented_system})
+        # Build messages: [static system] [dynamic system] [chat history without old system]
+        tmp_chat_history = [{"role": "system", "content": system_role}]
+        if dynamic_with_memory:
+            tmp_chat_history.append({"role": "system", "content": dynamic_with_memory})
+        for msg in self.chat_history:
+            if msg["role"] != "system":
+                tmp_chat_history.append(msg)
 
         clean_history = [{"role": m["role"], "content": m["content"]} for m in tmp_chat_history]
         gpt_response = await call_llm_api(clean_history)
