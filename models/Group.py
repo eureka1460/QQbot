@@ -14,7 +14,8 @@ class Group:
         self._save_callback = save_callback
 
     def add_message(self, role, message_content, user_id=None):
-        message_content = "by " + str(user_id) + ": " + message_content if user_id else message_content
+        if role == "user" and user_id:
+            message_content = f"QQ{user_id}: {message_content}"
         self.chat_history.append({
             "role": role,
             "content": message_content,
@@ -29,11 +30,9 @@ class Group:
     def get_chat_history(self):
         return self.chat_history
 
-    async def handle_message(self, user_id, message_content, system_role, store_user=True, dynamic_context=""):
+    async def handle_message(self, user_id: Optional[int], message_content, system_role, store_user=True, dynamic_context=""):
         if self.memory and store_user:
             self.memory.store(self.group_id, user_id, message_content, "user")
-
-        self.add_message("user", message_content, user_id)
 
         # Build dynamic context: time/mood + long-term memory
         dynamic_with_memory = dynamic_context
@@ -46,10 +45,11 @@ class Group:
                     + "\n[历史记忆结束]"
                 )
 
-        # Build messages: [static system] [dynamic system] [chat history without old system]
+        current_content = self._with_runtime_context(message_content, dynamic_with_memory)
+        self.add_message("user", current_content, user_id)
+
+        # Build messages: [static system] [append-only chat history]
         tmp_chat_history = [{"role": "system", "content": system_role}]
-        if dynamic_with_memory:
-            tmp_chat_history.append({"role": "system", "content": dynamic_with_memory})
         for msg in self.chat_history:
             if msg["role"] != "system":
                 tmp_chat_history.append(msg)
@@ -62,3 +62,16 @@ class Group:
         self.add_message("assistant", gpt_response)
 
         return gpt_response
+
+    @staticmethod
+    def _with_runtime_context(message_content: str, runtime_context: str) -> str:
+        runtime_context = (runtime_context or "").strip()
+        if not runtime_context:
+            return message_content
+        return (
+            "[本轮运行时上下文]\n"
+            + runtime_context
+            + "\n[运行时上下文结束]\n\n"
+            + "[当前群聊输入]\n"
+            + message_content
+        )

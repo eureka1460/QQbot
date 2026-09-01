@@ -39,6 +39,7 @@ async def call_llm_api(chat_history):
         temperature=DEEPSEEK_TEMPERATURE,
         top_p=1,
         stream=True,
+        stream_options={"include_usage": True},
     )
     if DEEPSEEK_MODEL.startswith("deepseek-v4"):
         request_payload["extra_body"] = {"thinking": {"type": "disabled"}}
@@ -49,9 +50,13 @@ async def call_llm_api(chat_history):
 
             response = await client.chat.completions.create(**request_payload)
             full_response = ""
+            usage = None
             async for chunk in response:
+                if getattr(chunk, "usage", None):
+                    usage = chunk.usage
                 if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
                     full_response += chunk.choices[0].delta.content
+            _log_cache_usage(usage)
             return full_response
 
         except Exception as e:
@@ -64,6 +69,27 @@ async def call_llm_api(chat_history):
 
 # Backward-compatible name while model/session code is migrated gradually.
 call_groq_api = call_llm_api
+
+
+def _usage_value(usage, key: str):
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        return usage.get(key)
+    return getattr(usage, key, None)
+
+
+def _log_cache_usage(usage) -> None:
+    hit = _usage_value(usage, "prompt_cache_hit_tokens")
+    miss = _usage_value(usage, "prompt_cache_miss_tokens")
+    prompt_tokens = _usage_value(usage, "prompt_tokens")
+    if hit is None or miss is None:
+        return
+
+    total = hit + miss
+    rate = (hit / total * 100) if total else 0
+    prompt_part = f", prompt={prompt_tokens}" if prompt_tokens is not None else ""
+    print(f"[DeepSeek Cache] hit={hit}, miss={miss}, rate={rate:.1f}%{prompt_part}")
 
 
 async def search_web(query: str) -> str:

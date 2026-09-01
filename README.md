@@ -9,6 +9,8 @@
 | 角色扮演 | 内置猫娘人格（主人/守护模式），傲娇恋人风格，支持表情包辅助情绪表达 |
 | 长期记忆 | 群聊+私聊消息向量化存入 ChromaDB，按群/用户分 collection，LLM 自动检索相关历史 |
 | 场景感知 | bot 自动区分群聊/私聊场合，system prompt 附带场景标识和当前时间 |
+| 群聊发言人识别 | 群聊上下文统一使用 `QQ<号码>:` 标记真实发言人，避免多人消息被模型混淆 |
+| Prompt 缓存优化 | 固定人设置于稳定 system 前缀，时间/档案/记忆等动态上下文按轮次追加，提高 DeepSeek 缓存命中率 |
 | 自适应回复 | 根据群活跃度自动调整回复延迟和字数限制，人少快回、人多慢回 |
 | 随机参与 | @bot/问句 100% 回复，闲聊 20% 概率随机搭话，像真人而不是 24h 客服 |
 | 时段语调 | 根据早中晚深夜自动调整语气（清晨活泼、下午慵懒、深夜温柔） |
@@ -126,7 +128,7 @@ pkill -f bot.py
 run.bat
 ```
 
-日志出现 `[NapCat] NapCat connected from path` 表示连接成功，`[Memory] Vector memory ready` 表示长期记忆就绪。
+日志出现 `[NapCat] NapCat connected from path` 表示连接成功，`[Memory] Vector memory ready` 表示长期记忆就绪。对话请求完成后若 DeepSeek 返回 usage，会额外输出 `[DeepSeek Cache] hit=..., miss=..., rate=...` 用于观察 prompt 缓存命中率。
 
 ### 5. 表情包（可选）
 
@@ -178,6 +180,12 @@ run.bat
 | 短期记忆 | 内存滑动窗口 + `memory_db/sessions/` 磁盘持久化 | 最近 N 条对话，带时间戳，重启后自动恢复 |
 | 长期记忆 | ChromaDB（磁盘持久化） | 向量化消息，按 `group_{id}` / `user_{id}` 分 collection |
 
+### Prompt 缓存策略
+
+对话 prompt 按缓存友好的顺序组织：稳定角色卡作为第一段 system，历史消息按轮次追加；当前时间、当前用户身份、用户档案、长期记忆检索结果、联网搜索结果和群聊活跃度等易变化信息，会放入本轮的 `[本轮运行时上下文]` 中随当前消息一起保存。这样模型仍然能看到完整上下文，同时下一轮请求可以复用上一轮的完整输入/输出前缀，提升 DeepSeek 上下文缓存命中率。
+
+群聊中每条消息统一使用 `QQ<号码>:` 标记真实发言人。该前缀会进入短期历史和批量群聊输入，帮助模型区分多人发言。
+
 ### 群聊 ↔ 私聊打通
 
 群聊消息同时存入 `group_{group_id}` 和 `user_{user_id}` 两个 collection。同一用户在群里的发言，切到私聊后 bot 也能检索到。
@@ -216,9 +224,9 @@ QQBot/
 ├── bot.py                      # WebSocket 服务器 & 消息收发
 ├── handlers.py                 # 消息路由 & 多模态预处理
 ├── agent_orchestrator.py       # Agent 编排（决策/对话/搜索/工具调用）
-├── persona_engine.py           # 人格系统（主人/守护模式、档案注入、场景感知）
+├── persona_engine.py           # 人格系统（稳定角色卡、运行时上下文、场景感知）
 ├── session_manager.py          # 会话管理（私聊/群聊上下文、TTL 控制）
-├── api.py                      # DeepSeek API 封装（含重试）
+├── api.py                      # DeepSeek API 封装（含重试与缓存命中日志）
 ├── config.py                   # 配置加载
 ├── command_handlers.py         # 命令解析与分发
 ├── tool_router.py              # 工具路由
@@ -232,8 +240,8 @@ QQBot/
 │   ├── banlist.py              # 禁用用户管理
 │   └── session_store.py        # 短期记忆磁盘持久化（重启恢复）
 ├── models/
-│   ├── User.py                 # 私聊会话模型（时间戳 + 长期记忆）
-│   └── Group.py                # 群聊会话模型（滑动窗口 + 长期记忆）
+│   ├── User.py                 # 私聊会话模型（运行时上下文 + 长期记忆）
+│   └── Group.py                # 群聊会话模型（发言人前缀 + 长期记忆）
 ├── roles/
 │   └── murasame_card.py        # 猫娘角色卡（人格提示词）
 ├── plugins/

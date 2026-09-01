@@ -47,10 +47,8 @@ class User:
         print(f"[Debug] User.handle_message called with system_role length: {len(system_role)}")
         print(f"[Debug] System role preview: {system_role[:200]}...")
 
-        if self.memory:
+        if self.memory and store_user:
             self.memory.store(self.user_id, self.user_id, message_content, "user", prefix="user")
-
-        self.add_message("user", message_content, self.user_id)
 
         # Build dynamic context: time/mood + long-term memory
         dynamic_with_memory = dynamic_context
@@ -63,10 +61,11 @@ class User:
                     + "\n[历史记忆结束]"
                 )
 
-        # Build messages: [static system] [dynamic system] [chat history without old system]
+        current_content = self._with_runtime_context(message_content, dynamic_with_memory)
+        self.add_message("user", current_content, self.user_id)
+
+        # Build messages: [static system] [append-only chat history]
         tmp_chat_history = [{"role": "system", "content": system_role}]
-        if dynamic_with_memory:
-            tmp_chat_history.append({"role": "system", "content": dynamic_with_memory})
         for msg in self.chat_history:
             if msg["role"] != "system":
                 tmp_chat_history.append(msg)
@@ -79,3 +78,16 @@ class User:
         self.add_message("assistant", gpt_response)
 
         return gpt_response
+
+    @staticmethod
+    def _with_runtime_context(message_content: str, runtime_context: str) -> str:
+        runtime_context = (runtime_context or "").strip()
+        if not runtime_context:
+            return message_content
+        return (
+            "[本轮运行时上下文]\n"
+            + runtime_context
+            + "\n[运行时上下文结束]\n\n"
+            + "[当前用户消息]\n"
+            + message_content
+        )

@@ -209,6 +209,8 @@ class AgentOrchestrator:
                     )
                     _IGNORE_RE = re.compile(r'<ignore>\s*', re.IGNORECASE)
                     if _IGNORE_RE.fullmatch(response.strip()):
+                        if group.chat_history and group.chat_history[-1]["role"] == "assistant":
+                            group.chat_history = group.chat_history[:-1]
                         continue
                     segments = await self._build_message_segments(response)
                     await self._send_with_human_delay(ws, gid, segments, is_group=True)
@@ -263,14 +265,15 @@ class AgentOrchestrator:
             for uid in speaker_ids:
                 p = self.persona_engine.profile_manager.to_prompt(uid)
                 if p:
-                    all_profiles.append(p)
-        profile_hint = "\n".join(all_profiles) + "\n\n" if all_profiles else ""
+                    all_profiles.append(f"QQ{uid}: {p}")
+        profile_context = "\n".join(all_profiles)
 
         # Build batch context
         limit_hint = f" [活跃度:{'激烈' if activity=='high' else '闲聊'}, 回复限制:{word_limit}字以内]" if word_limit else ""
-        lines = [f"[最近群聊消息{limit_hint}]"]
-        if profile_hint:
-            lines[0] = profile_hint + lines[0]
+        lines = [
+            f"[最近群聊消息{limit_hint}]",
+            "[注意: 每行开头的 QQ<号码>: 是真实发言人，冒号后的内容才是该发言人的消息。]",
+        ]
         for _, uid, msg, _ in entries:
             lines.append(f"QQ{uid}: {msg}")
         if word_limit:
@@ -281,25 +284,36 @@ class AgentOrchestrator:
 
         # Web search via Qwen (only when @mention + search keywords)
         _search_kw = ["搜索", "查一下", "帮我查", "天气", "新闻", "股价", "汇率", "今天几号", "最近发生"]
+        search_context = ""
         if triggered and any(kw in batch_text for kw in _search_kw):
             try:
                 print(f"[Agent] group {group_id} triggering web search...")
                 search_result = await search_web(batch_text)
                 if search_result:
-                    batch_text = batch_text + f"\n\n[联网搜索结果]\n{search_result}\n[搜索结束]"
+                    search_context = f"[联网搜索结果]\n{search_result}\n[搜索结束]"
                     print(f"[Agent] group {group_id} search results injected ({len(search_result)} chars)")
             except Exception as exc:
                 print(f"[Agent] group {group_id} search failed: {exc}")
 
         # Send to LLM
         persona_prompt = self.persona_engine.prepare(entries[-1][1], batch_text, is_group=True)
+        runtime_context = persona_prompt.dynamic_context
+        runtime_parts = []
+        if profile_context:
+            runtime_parts.append("[本批群友档案]\n" + profile_context)
+        if word_limit:
+            runtime_parts.append(f"[群聊回复限制]\n当前群聊较活跃，请将回复控制在 {word_limit} 字以内，一句说完不要霸屏。")
+        if search_context:
+            runtime_parts.append(search_context)
+        if runtime_parts:
+            runtime_context += "\n\n" + "\n\n".join(runtime_parts)
         group = self.session_manager.get_group_session(group_id)
         response = await group.handle_message(
-            entries[-1][1],
+            None,
             persona_prompt.message_content,
             persona_prompt.system_role,
             store_user=False,
-            dynamic_context=persona_prompt.dynamic_context,
+            dynamic_context=runtime_context,
         )
 
         _IGNORE_RE = re.compile(r'<ignore>\s*', re.IGNORECASE)
