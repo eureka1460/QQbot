@@ -5,6 +5,13 @@ import roles
 from cachetools import TTLCache
 from models import Group, User
 
+_RUNTIME_CONTEXT_START = "[本轮运行时上下文]"
+_RUNTIME_CONTEXT_END = "[运行时上下文结束]"
+_CURRENT_INPUT_MARKERS = (
+    "[当前群聊输入]\n",
+    "[当前用户消息]\n",
+)
+
 
 class SessionManager:
     """Owns conversation session lifecycle for private and group chats."""
@@ -25,7 +32,9 @@ class SessionManager:
             save_cb = self.session_store.make_save_callback("user", user_id) if self.session_store else None
 
             # Restore saved short-term memory if available
-            saved = self.session_store.load("user", user_id) if self.session_store else []
+            saved = self._sanitize_saved_history(
+                self.session_store.load("user", user_id) if self.session_store else []
+            )
             system_msg = {
                 "role": "system",
                 "content": self._default_private_role(user_id),
@@ -48,7 +57,9 @@ class SessionManager:
         if group_id not in self.group_sessions:
             save_cb = self.session_store.make_save_callback("group", group_id) if self.session_store else None
 
-            saved = self.session_store.load("group", group_id) if self.session_store else []
+            saved = self._sanitize_saved_history(
+                self.session_store.load("group", group_id) if self.session_store else []
+            )
             group = Group(group_id, self.bot_qq, memory=self.memory, window_size=self.window_size, save_callback=save_cb)
             group.chat_history = saved
             self.group_sessions[group_id] = group
@@ -81,3 +92,31 @@ class SessionManager:
         if self.is_super_user(user_id):
             return roles.get_Murasame_goshujin_role(user_id, self.bot_qq)
         return roles.get_Murasame_customs_role(user_id, self.bot_qq)
+
+    def _sanitize_saved_history(self, saved: list) -> list:
+        """Strip runtime wrappers persisted by older cache-optimization builds."""
+        if not isinstance(saved, list):
+            return []
+
+        sanitized = []
+        for msg in saved:
+            if not isinstance(msg, dict):
+                continue
+            clean = dict(msg)
+            content = clean.get("content")
+            if isinstance(content, str) and _RUNTIME_CONTEXT_START in content:
+                clean["content"] = self._strip_runtime_context(content)
+            sanitized.append(clean)
+        return sanitized
+
+    @staticmethod
+    def _strip_runtime_context(content: str) -> str:
+        for marker in _CURRENT_INPUT_MARKERS:
+            marker_index = content.find(marker)
+            if marker_index != -1:
+                return content[marker_index + len(marker):].strip()
+
+        end_index = content.find(_RUNTIME_CONTEXT_END)
+        if end_index != -1:
+            return content[end_index + len(_RUNTIME_CONTEXT_END):].strip()
+        return content

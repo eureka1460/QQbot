@@ -4,6 +4,9 @@ from api import *
 
 
 class Group:
+    _TRIM_SLACK_MIN = 4
+    _TRIM_SLACK_MAX = 20
+
     def __init__(self, group_id, bot_qq, memory=None, window_size: int = 30, save_callback=None):
         self.group_id = group_id
         self.users = {}
@@ -13,7 +16,7 @@ class Group:
         self._window_size = window_size
         self._save_callback = save_callback
 
-    def add_message(self, role, message_content, user_id=None):
+    def add_message(self, role, message_content, user_id=None, trim=True):
         if role == "user" and user_id:
             message_content = f"QQ{user_id}: {message_content}"
         self.chat_history.append({
@@ -21,8 +24,8 @@ class Group:
             "content": message_content,
             "timestamp": int(time.time() * 1000),
         })
-        if len(self.chat_history) > self._window_size:
-            self.chat_history = self.chat_history[-self._window_size:]
+        if trim:
+            self._trim_chat_history()
 
         if self._save_callback:
             self._save_callback(self.chat_history)
@@ -45,33 +48,43 @@ class Group:
                     + "\n[历史记忆结束]"
                 )
 
-        current_content = self._with_runtime_context(message_content, dynamic_with_memory)
-        self.add_message("user", current_content, user_id)
-
-        # Build messages: [static system] [append-only chat history]
+        # Build messages: [static system] [cached history] [current input] [runtime context]
         tmp_chat_history = [{"role": "system", "content": system_role}]
         for msg in self.chat_history:
             if msg["role"] != "system":
                 tmp_chat_history.append(msg)
+        tmp_chat_history.append({"role": "user", "content": self._format_user_message(message_content, user_id)})
+        runtime_message = self._runtime_context_message(dynamic_with_memory)
+        if runtime_message:
+            tmp_chat_history.append(runtime_message)
 
         clean_history = [{"role": m["role"], "content": m["content"]} for m in tmp_chat_history]
         gpt_response = await call_llm_api(clean_history)
 
+        self.add_message("user", message_content, user_id, trim=False)
         if self.memory:
             self.memory.store(self.group_id, None, gpt_response, "assistant")
         self.add_message("assistant", gpt_response)
 
         return gpt_response
 
+    def _trim_chat_history(self) -> None:
+        if len(self.chat_history) <= self._window_size + self._trim_slack():
+            return
+        self.chat_history = self.chat_history[-self._window_size:]
+
+    def _trim_slack(self) -> int:
+        return max(self._TRIM_SLACK_MIN, min(self._TRIM_SLACK_MAX, self._window_size // 5))
+
     @staticmethod
-    def _with_runtime_context(message_content: str, runtime_context: str) -> str:
+    def _format_user_message(message_content: str, user_id: Optional[int] = None) -> str:
+        if user_id:
+            return f"QQ{user_id}: {message_content}"
+        return message_content
+
+    @staticmethod
+    def _runtime_context_message(runtime_context: str) -> Optional[dict]:
         runtime_context = (runtime_context or "").strip()
         if not runtime_context:
-            return message_content
-        return (
-            "[本轮运行时上下文]\n"
-            + runtime_context
-            + "\n[运行时上下文结束]\n\n"
-            + "[当前群聊输入]\n"
-            + message_content
-        )
+            return None
+        return {"role": "system", "content": "[本轮运行时上下文]\n" + runtime_context + "\n[运行时上下文结束]"}
